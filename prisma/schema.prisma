@@ -1,0 +1,304 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  passwordHash String?
+  googleId     String?  @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  brand        Brand?
+  clients      Client[]
+  decks        Deck[]
+  subscription Subscription?
+
+  @@index([email])
+}
+
+model Brand {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  arnNumber    String?
+  logoUrl      String?
+  primaryColor String   @default("#1B4F72")
+  phone        String?
+  email        String?
+  disclaimer   String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Client {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  email       String?
+  phone       String?
+  pan         String?
+  riskProfile String?
+  goals       Json?
+  notes       String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  decks      Deck[]
+  casUploads CASUpload[]
+  holdings   Holding[]
+  sipRecords SIPRecord[]
+  insights   PortfolioInsight[]
+  analyses   PortfolioAnalysis[]
+
+  @@index([userId])
+}
+
+model CASUpload {
+  id                  String    @id @default(cuid())
+  clientId            String
+  client              Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  storagePath         String
+  fileName            String
+  fileSize            Int
+  isPasswordProtected Boolean   @default(false)
+  passwordEncrypted   String?   // AES-256-GCM encrypted, see lib/crypto.ts
+  parsedData          Json?
+  parsedAt            DateTime?
+  parseError          String?
+  createdAt           DateTime  @default(now())
+
+  deck Deck?
+
+  holdings   Holding[]
+  sipRecords SIPRecord[]
+  insights   PortfolioInsight[]
+  analysis   PortfolioAnalysis?
+
+  @@index([clientId])
+}
+
+model Deck {
+  id             String     @id @default(cuid())
+  userId         String
+  user           User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientId       String
+  client         Client     @relation(fields: [clientId], references: [id])
+  casUploadId    String?    @unique
+  casUpload      CASUpload? @relation(fields: [casUploadId], references: [id])
+
+  status         DeckStatus @default(QUEUED)
+  jobId          String?    @unique
+
+  aiNarrative    Json?
+
+  pdfStoragePath String?
+  pdfUrl         String?
+
+  portfolioValue Float?
+  xirr           Float?
+  totalFunds     Int?
+  reportPeriod   String?
+
+  errorMessage   String?
+  generatedAt    DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@index([userId])
+  @@index([clientId])
+  @@index([jobId])
+}
+
+enum DeckStatus {
+  QUEUED
+  PARSING_CAS
+  GENERATING_AI
+  GENERATING_PDF
+  COMPLETED
+  FAILED
+}
+
+model Subscription {
+  id                 String    @id @default(cuid())
+  userId             String    @unique
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  plan               Plan      @default(FREE)
+  razorpaySubId      String?   @unique
+  razorpayCustomerId String?
+
+  status             SubStatus @default(ACTIVE)
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+
+  decksUsedThisMonth Int       @default(0)
+  lastResetAt        DateTime  @default(now())
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+}
+
+enum Plan {
+  FREE
+  STARTER
+  PRO
+}
+
+enum SubStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  PAUSED
+}
+
+// =========================================================
+// Portfolio Intelligence Engine (V0)
+// =========================================================
+
+model Holding {
+  id            String    @id @default(cuid())
+  clientId      String
+  client        Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  casUploadId   String
+  casUpload     CASUpload @relation(fields: [casUploadId], references: [id], onDelete: Cascade)
+
+  schemeName    String
+  category      String    // e.g. "Equity - Large Cap", "Debt - Liquid", "Hybrid - Aggressive"
+  assetClass    AssetClass
+
+  units         Float
+  currentValue  Float
+  investedValue Float
+  xirr          Float?
+  expenseRatio  Float?    // percentage, e.g. 1.8 = 1.8%
+
+  createdAt     DateTime  @default(now())
+
+  @@index([clientId])
+  @@index([casUploadId])
+}
+
+enum AssetClass {
+  EQUITY
+  DEBT
+  HYBRID
+  CASH
+  OTHER
+}
+
+model SIPRecord {
+  id            String    @id @default(cuid())
+  clientId      String
+  client        Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  casUploadId   String
+  casUpload     CASUpload @relation(fields: [casUploadId], references: [id], onDelete: Cascade)
+
+  schemeName    String
+  amount        Float
+  status        SIPStatus @default(ACTIVE)
+  missedCount   Int       @default(0)
+  lastDebitDate DateTime?
+
+  createdAt     DateTime  @default(now())
+
+  @@index([clientId])
+  @@index([casUploadId])
+}
+
+enum SIPStatus {
+  ACTIVE
+  PAUSED
+  MISSED
+  STOPPED
+}
+
+model PortfolioInsight {
+  id          String              @id @default(cuid())
+  clientId    String
+  client      Client              @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  casUploadId String
+  casUpload   CASUpload           @relation(fields: [casUploadId], references: [id], onDelete: Cascade)
+
+  severity    InsightSeverity
+  category    InsightCategory
+  title       String
+  description String              @db.Text
+  metrics     Json
+
+  createdAt   DateTime            @default(now())
+
+  @@index([clientId])
+  @@index([casUploadId])
+}
+
+enum InsightSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum InsightCategory {
+  CONCENTRATION_RISK
+  ASSET_ALLOCATION
+  FUND_OVERLAP
+  HIGH_EXPENSE
+  SIP_HEALTH
+  PERFORMANCE
+}
+
+model PortfolioAnalysis {
+  id            String    @id @default(cuid())
+  clientId      String
+  client        Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  casUploadId   String    @unique
+  casUpload     CASUpload @relation(fields: [casUploadId], references: [id], onDelete: Cascade)
+
+  portfolioScore Int      // 0-100
+  summary        Json     // full PortfolioAnalyticsResult snapshot
+  aiExplanation  String?  @db.Text
+
+  createdAt     DateTime  @default(now())
+
+  @@index([clientId])
+}
+
+// =========================================================
+// Fund Master — scheme reference data for enrichment
+// =========================================================
+
+model FundMaster {
+  id            String    @id @default(cuid())
+  amfiCode      String    @unique // AMFI scheme code, primary matching key
+  schemeName    String
+  isin1         String?
+  isin2         String?
+  amcName       String?
+  category      String    // normalized category, e.g. "Equity - Large Cap"
+  assetClass    AssetClass
+
+  expenseRatio  Float?    // TER %, where available (V0: curated/estimated)
+  nav           Float?
+  navDate       DateTime?
+
+  // Normalized lookup helper: lowercase, whitespace-collapsed scheme name
+  // used for fuzzy matching when CAS data lacks ISIN/AMFI code.
+  searchName    String
+
+  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime  @default(now())
+
+  @@index([searchName])
+  @@index([category])
+}
